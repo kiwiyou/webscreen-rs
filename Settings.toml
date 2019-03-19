@@ -1,2 +1,4 @@
 # address to bind
 bind = "0.0.0.0:8080"
+# screen update interval (in milliseconds)
+interval = 100

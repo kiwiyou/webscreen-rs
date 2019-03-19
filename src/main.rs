@@ -1,19 +1,23 @@
-#![feature(drain_filter)]
 use actix::*;
 use actix_web::*;
 use config::Config;
 use std::io;
 use std::sync::{Arc, Weak};
 
-fn ws_index(r: &HttpRequest) -> Result<HttpResponse, Error> {
+fn ws_index(r: &HttpRequest<WebscreenState>) -> Result<HttpResponse, Error> {
     ws::start(r, ImageSocket)
 }
 
 fn main() {
     let mut settings = Config::default();
     settings.merge(config::File::with_name("Settings")).unwrap();
-    server::new(|| {
-        App::new()
+    let sys = System::new("webscreen");
+    let provider = ScreenProvider::new(settings.get_int("interval").unwrap() as u64).start();
+    server::new(move || {
+        let state = WebscreenState {
+            provider: provider.clone(),
+        };
+        App::with_state(state)
             .resource("/ws/", |r| r.method(http::Method::GET).f(ws_index))
             .resource("/", |r| {
                 r.method(http::Method::GET).f(|_| {
@@ -27,7 +31,12 @@ fn main() {
     })
     .bind(settings.get_str("bind").unwrap())
     .unwrap()
-    .run();
+    .start();
+    sys.run();
+}
+
+struct WebscreenState {
+    provider: Addr<ScreenProvider>,
 }
 
 struct UpdateScreen(Weak<[u8]>);
@@ -36,14 +45,16 @@ impl Message for UpdateScreen {
 }
 
 struct ScreenProvider {
+    interval: u64,
     screen: x11_screenshot::Screen,
     current: Arc<[u8]>,
     subscribers: Vec<Recipient<UpdateScreen>>,
 }
 
-impl Default for ScreenProvider {
-    fn default() -> Self {
+impl ScreenProvider {
+    fn new(interval: u64) -> Self {
         Self {
+            interval,
             screen: x11_screenshot::Screen::open().unwrap(),
             current: Arc::new([0]),
             subscribers: Vec::new(),
@@ -51,18 +62,16 @@ impl Default for ScreenProvider {
     }
 }
 
-impl Supervised for ScreenProvider {}
-
-impl SystemService for ScreenProvider {}
-
 impl Actor for ScreenProvider {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
-        // fixed to 100ms per refresh
-        ctx.run_interval(std::time::Duration::from_millis(100), |act, _ctx| {
-            act.update();
-        });
+        ctx.run_interval(
+            std::time::Duration::from_millis(self.interval),
+            |act, _ctx| {
+                act.update();
+            },
+        );
     }
 }
 
@@ -82,9 +91,8 @@ impl ScreenProvider {
                         self.current = input.into();
                     }
                     let b = Arc::downgrade(&self.current);
-                    self.subscribers.drain_filter(|subscriber| {
-                        subscriber.try_send(UpdateScreen(b.clone())).is_err()
-                    });
+                    self.subscribers
+                        .retain(|subscriber| subscriber.try_send(UpdateScreen(b.clone())).is_ok());
                 }
                 None => {}
             }
@@ -127,11 +135,12 @@ impl Handler<SubscribeScreen> for ScreenProvider {
 struct ImageSocket;
 
 impl Actor for ImageSocket {
-    type Context = ws::WebsocketContext<Self>;
+    type Context = ws::WebsocketContext<Self, WebscreenState>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        let provider: Addr<ScreenProvider> = System::current().registry().get();
-        provider.do_send(SubscribeScreen(ctx.address().recipient()));
+        ctx.state()
+            .provider
+            .do_send(SubscribeScreen(ctx.address().recipient()));
     }
 }
 
@@ -148,7 +157,11 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ImageSocket {
 impl Handler<UpdateScreen> for ImageSocket {
     type Result = ();
 
-    fn handle(&mut self, message: UpdateScreen, ctx: &mut ws::WebsocketContext<Self>) {
+    fn handle(
+        &mut self,
+        message: UpdateScreen,
+        ctx: &mut ws::WebsocketContext<Self, WebscreenState>,
+    ) {
         use ws::*;
         let mine = message.0.upgrade().unwrap();
         ctx.send_text(base64::encode(&mine));
