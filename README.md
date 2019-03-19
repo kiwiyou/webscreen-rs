@@ -14,6 +14,7 @@ Clone this repository and run using cargo.
 
 `Settings.toml`
 - `bind`: An ip address to bind to.
+- `interval`: Screen update interval in milliseconds.
 
 ## License
 [AGPLv3](https://www.gnu.org/licenses/agpl-3.0.html)
