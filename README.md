@@ -7,7 +7,7 @@ Web Screencast written in Rust.
 Clone this repository and run using cargo.
 
 ```bash
-cargo +nightly run --release
+    cargo run --release
 ```
 
 ## Configuration
