@@ -10,17 +10,22 @@ fn ws_index(r: &HttpRequest<WebscreenState>) -> Result<HttpResponse, Error> {
 }
 
 fn main() {
+    env_logger::init();
+
     let mut settings = Config::default();
     settings.merge(config::File::with_name("Settings")).unwrap();
+    let bind = settings
+        .get_str("bind")
+        .expect("Cannot resolve bind address.");
+    let interval = settings.get_int("interval").unwrap_or(100) as u64;
     let sys = System::new("webscreen");
-    let provider = ScreenProvider::new(settings.get_int("interval").unwrap() as u64)
-        .unwrap()
-        .start();
+    let provider = ScreenProvider::new(interval).unwrap().start();
     server::new(move || {
         let state = WebscreenState {
             provider: provider.clone(),
         };
         App::with_state(state)
+            .middleware(middleware::Logger::default())
             .resource("/ws/", |r| r.method(http::Method::GET).f(ws_index))
             .resource("/", |r| {
                 r.method(http::Method::GET).f(|_| {
@@ -32,9 +37,10 @@ fn main() {
             .handler("/", fs::StaticFiles::new("static").unwrap())
             .finish()
     })
-    .bind(settings.get_str("bind").unwrap())
+    .bind(&bind)
     .unwrap()
     .start();
+    log::info!("Start listening on {}", bind);
     sys.run();
 }
 

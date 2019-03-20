@@ -94,8 +94,8 @@ impl ScreenProvider {
             Arbiter::spawn(
                 self.capturer
                     .send(RequestCapture)
-                    .map(move |result| {
-                        if let Ok(buffer) = result {
+                    .map(move |result| match result {
+                        Ok(buffer) => {
                             let b: Box<[u8]> = buffer.into();
                             {
                                 let mut write_lock = subscriber.write().unwrap();
@@ -104,6 +104,7 @@ impl ScreenProvider {
                                 })
                             }
                         }
+                        Err(error) => log::error!("Error capturing screen: {}", error),
                     })
                     .map_err(|_| {}),
             );
